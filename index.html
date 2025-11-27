@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="kk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Графика Тесті: Ойын Сабағы</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <!-- Font Awesome (for icons) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0d1117; color: #e5e7eb; }
+        .card { transition: all 0.2s; }
+        .answer-option:hover { transform: translateY(-2px); box-shadow: 0 10px 15px rgba(0, 0, 0, 0.2); }
+        .teacher-view-btn { position: fixed; top: 1rem; right: 1rem; z-index: 50; }
+        .kahoot-bg-color-1 { background-color: #FE3C30; } /* Red */
+        .kahoot-bg-color-2 { background-color: #388E3C; } /* Green */
+        .kahoot-bg-color-3 { background-color: #2196F3; } /* Blue */
+        .kahoot-bg-color-4 { background-color: #FFC107; } /* Yellow */
+        .game-title { text-shadow: 2px 2px 4px rgba(0,0,0,0.4); }
+        .loader { border-top-color: #3498db; -webkit-animation: spin 1s ease-in-out infinite; animation: spin 1s ease-in-out infinite; }
+        @-webkit-keyframesspin { 0% { -webkit-transform: rotate(0deg); } 100% { -webkit-transform: rotate(360deg); } }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Set Firebase Log Level to Debug
+        setLogLevel('Debug');
+        
+        // --- GLOBAL SETUP & FIREBASE INIT ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Gemini API Configuration
+        const API_KEY = ""; // Placeholder for Canvas environment
+        const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${API_KEY}`;
+        
+        let app, db, auth;
+        let userId = null;
+        let userName = "Қонақ";
+
+        // Global state object
+        window.gameState = {
+            currentQuestionIndex: 0,
+            score: 0,
+            isQuizActive: false,
+            quizComplete: false,
+            leaderboardData: [],
+            isTeacherView: false,
+            isAuthReady: false,
+            // LLM State
+            explanationText: null,
+            isExplaining: false,
+            teacherConcept: null,
+            isGeneratingConcept: false
+        };
+
+        const QUESTIONS = [
+            // 3D Конвейер негіздері (4 сұрақ)
+            { id: 1, topic: "3D Конвейер негіздері", q: "Монитор экранында үш өлшемді бейнелерді жасау процесі қалай аталады?", options: ["Рендеринг", "Проекция", "Конвейер", "Текстуралау"], correct: 2, image: "https://placehold.co/400x200/2196F3/ffffff?text=3D+Конвейер+Сызығы" },
+            { id: 2, topic: "3D Конвейер негіздері", q: "Үш өлшемді координаталар жүйесін белгілейтін үш ось қандай?", options: ["Alpha, Beta, Gamma", "x, y, z", "Көлденең, тік, қиғаш", "Бастау, орта, аяқ"], correct: 1, image: "https://placehold.co/400x200/388E3C/ffffff?text=X+Y+Z+Осьтары" },
+            { id: 3, topic: "3D Конвейер негіздері", q: "Объектінің координаталар кеңістігінде құрылған торап нүктелері қалай аталады?", options: ["Салалар", "Шыңдар", "Модельдер", "Қаңқалар"], correct: 1, image: "https://placehold.co/400x200/FE3C30/ffffff?text=3D+Шыңдар" },
+            { id: 4, topic: "3D Конвейер негіздері", q: "Объект шыңдарын сызықтармен қосып жасалатын модель түрі?", options: ["Тұтас модель", "Салалық модель", "Қаңқа моделі", "Беттік модель"], correct: 2, image: "https://placehold.co/400x200/FFC107/000000?text=Қаңқа+Моделі" },
+            // Объектіні Модельдеу және Текстуралау (5 сұрақ)
+            { id: 5, topic: "Объектіні Модельдеу және Текстуралау", q: "Қаңқа моделі объект беттерін құрайтын нені белгілейді?", options: ["Осьтардың бағытын", "Жарық көздерін", "Салаларды", "Камераның орнын"], correct: 2, image: "https://placehold.co/400x200/2196F3/ffffff?text=Үшкір+Сала" },
+            { id: 6, topic: "Объектіні Модельдеу және Текстуралау", q: "Модельдің беттерін нақты және тартымды ету үшін қолданылатын әдіс?", options: ["Қаңқалау", "Текстуралау", "Пиксельдеу", "Конвейерлеу"], correct: 1, image: "https://placehold.co/400x200/388E3C/ffffff?text=Текстура+Үлгісі" },
+            { id: 7, topic: "Объектіні Модельдеу және Текстуралау", q: "Бетке жағылған суреттің өлшеміне қарай кеңейтілуі немесе кішірейтілуі неге байланысты?", options: ["Шыңдар санына", "Салмақ коэффициентіне", "Жарық көзінің түсіне", "Модельдің атына"], correct: 1, image: "https://placehold.co/400x200/FE3C30/ffffff?text=Масштабтау+Коэффиценті" },
+            { id: 8, topic: "Объектіні Модельдеу және Текстуралау", q: "3D-конвейердегі модельдің беттерін бояу процесін не қамтамасыз етеді?", options: ["Камера", "Графикалық процессор", "Аналогты сигнал", "VGA түрлендіргіш"], correct: 1, image: "https://placehold.co/400x200/FFC107/000000?text=GPU+Белгісі" },
+            { id: 9, topic: "Объектіні Модельдеу және Текстуралау", q: "Беттік модельдің негізгі мақсаты?", options: ["Дыбыс жазу", "Көлеңкелерді есептеу", "Интернетке қосылу", "Файлдарды сақтау"], correct: 1, image: "https://placehold.co/400x200/2196F3/ffffff?text=Көлеңке+Есептеу" },
+            // Жарықтандыру және Проекция (6 сұрақ)
+            { id: 10, topic: "Жарықтандыру және Проекция", q: "3D-модельді шынайы ету үшін оған не қажет?", options: ["Қосымша ось", "Жаңа текстура", "Жарық көздері", "Дыбыс картасы"], correct: 2, image: "https://placehold.co/400x200/388E3C/ffffff?text=3D+Жарықтандыру" },
+            { id: 11, topic: "Жарықтандыру және Проекция", q: "Жарық көздері объектінің түсі мен жарықтығын қалай өзгертеді?", options: ["Тек шыңдарды бояу арқылы", "Тек қаңқаны өзгерту арқылы", "Текстура мен беттік қасиеттерге әсер ету арқылы", "Тек z-осьін қолдану арқылы"], correct: 2, image: "https://placehold.co/400x200/FE3C30/ffffff?text=Жарық+Сәулесі" },
+            { id: 12, topic: "Жарықтандыру және Проекция", q: "Үш өлшемді объектіні екі өлшемді жазықтыққа (мониторға) аудару процесі?", options: ["Түрлендіру", "Проекция", "Акселерация", "Моделизация"], correct: 1, image: "https://placehold.co/400x200/FFC107/000000?text=Проекция+Нүктесі" },
+            { id: 13, topic: "Жарықтандыру және Проекция", q: "Проекцияның қандай түрі объектінің көлемін қашықтыққа байланысты өзгертеді (алыстағы кішірек)?", options: ["Ортогональды проекция", "Перспективалық проекция", "Изометриялық проекция", "Планарлы проекция"], correct: 1, image: "https://placehold.co/400x200/2196F3/ffffff?text=Перспектива+Бейнесі" },
+            { id: 14, topic: "Жарықтандыру және Проекция", q: "Объективтің екі өлшемді кеңістіктегі орны неге байланысты?", options: ["Текстураның сапасына", "Камераның орнына және бағытына", "Дыбыс сапасына", "Желі жылдамдығына"], correct: 1, image: "https://placehold.co/400x200/388E3C/ffffff?text=Камера+Көрінісі" },
+            { id: 15, topic: "Жарықтандыру және Проекция", q: "3D-акселерация дегеніміз не?", options: ["Дыбыс сапасын арттыру", "3D-конвейер процестерін жылдамдату", "Камераны жылжыту", "Файлдарды мұрағаттау"], correct: 1, image: "https://placehold.co/400x200/FE3C30/ffffff?text=Жылдамдықты+Арттыру" },
+            // Бейнеұстау Платалары (5 сұрақ)
+            { id: 16, topic: "Бейнеұстау Платалары", q: "Бейнеұстау платасының жұмыс істеуі үшін маңызды өлшем?", options: ["Дыбыстық жиілік", "Процессордың түрі", "Телевидение жүйесі (PAL/NTSC/SECAM)", "Интернет жылдамдығы"], correct: 2, image: "https://placehold.co/400x200/FFC107/000000?text=ТВ+Системалары" },
+            { id: 17, topic: "Бейнеұстау Платалары", q: "Платаның PAL, NTSC, SECAM жүйелерін қолдауы қалай аталады?", options: ["Аналогтық", "Мультижүйелік", "Динамикалық", "Статикалық"], correct: 1, image: "https://placehold.co/400x200/2196F3/ffffff?text=Көп+Жүйелілік" },
+            { id: 18, topic: "Бейнеұстау Платалары", q: "Бейнеұстау платасының келесі маңызды сипаттамасы немен жұмыс істейтіндігінде?", options: ["Компьютердің түсімен", "Сигнал түрлерімен", "Монитордың өлшемімен", "Пернетақтаның түрімен"], correct: 1, image: "https://placehold.co/400x200/388E3C/ffffff?text=Сигнал+Түрлері" },
+            { id: 19, topic: "Бейнеұстау Платалары", q: "Бейнеұстау платасының қандай мүмкіндігі болса, дыбыс оның ішіне құрастырылған болады?", options: ["Overley режимі", "Мультижүйелік", "Дыбыстық мүмкіндіктер", "VGA-TV түрлендіргіш"], correct: 2, image: "https://placehold.co/400x200/FE3C30/ffffff?text=Дыбыс+Құрылғысы" },
+            { id: 20, topic: "Бейнеұстау Платалары", q: "Бейнеұстау платалары негізінен не үшін арналған?", options: ["Интернетті жылдамдату", "Аналогтық бейнесигналдарды өңдеу", "3D-модельдерді жасау", "Операциялық жүйені орнату"], correct: 1, image: "https://placehold.co/400x200/FFC107/000000?text=Аналогты+Өңдеу" },
+            // VGA-TV Түрлендіргіш және Overley (5 сұрақ)
+            { id: 21, topic: "VGA-TV Түрлендіргіш және Overley", q: "VGA-TV түрлендіргішінің негізгі функциясы?", options: ["Аналогты сигналды цифрлыққа аудару", "Цифрлық VGA сигналын аналогты сигналға аудару", "Телевизиялық қабылдағышты VGA-ға аудару", "Дыбыстық сигналдарды өңдеу"], correct: 1, image: "https://placehold.co/400x200/2196F3/ffffff?text=VGA-TV+Ауыстыру" },
+            { id: 22, topic: "VGA-TV Түрлендіргіш және Overley", q: "VGA-TV түрлендіргіші түрлендірілген сигналды қайда енгізуге мүмкіндік береді?", options: ["Компьютерлік принтерге", "Телевизиялық қабылдағышқа", "Микрофонға", "Желілік маршрутизаторға"], correct: 1, image: "https://placehold.co/400x200/388E3C/ffffff?text=Теледидар+Иконы" },
+            { id: 23, topic: "VGA-TV Түрлендіргіш және Overley", q: "Overlay режимі нені көруге мүмкіндік береді, егер плата осы режимді қолдаса?", options: ["Тек мәтіндік файлдарды", "Компьютерлік мониторда \"тірі\" толық экранды видеоны", "Тек 3D-модельдің қаңқасын", "Тек статикалық суреттерді"], correct: 1, image: "https://placehold.co/400x200/FE3C30/ffffff?text=Overlay+Бейнесі" },
+            { id: 24, topic: "VGA-TV Түрлендіргіш және Overley", q: "Overley режимінің арқасында жұмыстың қарапайымдылығы мен көрнекілігі неге қол жеткізеді?", options: ["Процессордың жиілігіне", "Видеомониторды жиі қолдану қажет етпейтіндігіне", "Бағдарламалық қамтамасыз етудің болмауына", "Үш осьтің қолданылуына"], correct: 1, image: "https://placehold.co/400x200/FFC107/000000?text=Қарапайымдылық" },
+            { id: 25, topic: "VGA-TV Түрлендіргіш және Overley", q: "Overley режимі қандай деректерді қарау үшін пайдалы?", options: ["Тек аудио", "Тек мәтін", "Видеомәліметті", "Тек екі өлшемді графиктерді"], correct: 2, image: "https://placehold.co/400x200/2196F3/ffffff?text=Видео+Деректер" },
+            // Бағдарламалық Қамтамасыз ету (5 сұрақ)
+            { id: 26, topic: "Бағдарламалық Қамтамасыз ету", q: "Сызықты емес видеомонтаж үшін санды платаның видеосын иемдену не арқылы жүзеге асады?", options: ["Аналогтық дыбыспен", "Бағдарламалық қамтама жəне тезегіштермен", "VGA түрлендіргішпен", "Монитордың диагоналімен"], correct: 1, image: "https://placehold.co/400x200/388E3C/ffffff?text=Бағдарлама+Иконы" },
+            { id: 27, topic: "Бағдарламалық Қамтамасыз ету", q: "Сызықты емес видеомонтаж дегеніміз не?", options: ["Видеоны тек реттілікпен өңдеу", "Кез келген бөлігіне тікелей қол жеткізу арқылы видеоны өңдеу", "Тек суреттерді өңдеу", "Тек дыбыс жазу"], correct: 1, image: "https://placehold.co/400x200/FE3C30/ffffff?text=Монтаж+Таймлайны" },
+            { id: 28, topic: "Бағдарламалық Қамтамасыз ету", q: "3D-конвейердің жұмысын жеңілдету және жылдамдату үшін қолданылатын аппараттық құрал?", options: ["Аналогтық адаптер", "3D акселератор", "VGA-TV түрлендіргіш", "Дыбыс картасы"], correct: 1, image: "https://placehold.co/400x200/FFC107/000000?text=Акселератор+Чипі" },
+            { id: 29, topic: "Бағдарламалық Қамтамасыз ету", q: "Дыбыстық мүмкіндіктері бар бейнеұстау платасының артықшылығы?", options: ["Тек суреттерді көрсетеді", "Дыбысты видеомен бірге өңдеуге болады", "Тек Overley режимін қолдайды", "Тек PAL жүйесінде жұмыс істейді"], correct: 1, image: "https://placehold.co/400x200/2196F3/ffffff?text=Дыбыс+Шығу" },
+            { id: 30, topic: "Бағдарламалық Қамтамасыз ету", q: "PAL, NTSC, SECAM жүйелері неге қатысты?", options: ["3D модельдеуге", "Қаңқа моделіне", "Телевидение жүйелеріне", "Компьютердің осьтарына"], correct: 2, image: "https://placehold.co/400x200/388E3C/ffffff?text=ТВ+Стандарттары" }
+        ];
+        
+        // Function to select a random Kahoot color class
+        function getRandomKahootColor(index) {
+            const colors = ['kahoot-bg-color-1', 'kahoot-bg-color-2', 'kahoot-bg-color-3', 'kahoot-bg-color-4'];
+            return colors[index % colors.length];
+        }
+
+        // --- GEMINI API FUNCTIONS ---
+        // Enhanced fetch wrapper with exponential backoff
+        async function fetchWithRetry(url, options, maxRetries = 5) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        const errorBody = await response.json();
+                        throw new Error(`HTTP error! status: ${response.status}. Details: ${JSON.stringify(errorBody)}`);
+                    }
+                    return response;
+                } catch (error) {
+                    if (i === maxRetries - 1) throw error; 
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+        
+        /**
+         * Student Feature: Explains the current question's topic.
+         */
+        window.getQuestionExplanation = async function() {
+            if (window.gameState.isExplaining) return;
+
+            const q = QUESTIONS[window.gameState.currentQuestionIndex];
+            
+            // 1. Set loading state
+            window.gameState.isExplaining = true;
+            window.gameState.explanationText = null;
+            window.updateUI(); 
+
+            const systemPrompt = "Сіз - жоғары оқу орнына дейінгі студенттерге арналған білімді әрі мейірімді, қазақ тіліндегі оқытушысыз. Сұрақ мазмұнына сәйкес, тек қазақ тілінде, 3-4 сөйлемнен аспайтын қарапайым әрі нақты түсініктеме беріңіз. Сұрақтың өзіне жауап беруден аулақ болыңыз, тек тақырыпты түсіндіріңіз.";
+            const userQuery = `Төмендегі сұрақ қандай концептіні қамтитынын түсіндіріңіз: ${q.q}`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                tools: [{ "google_search": {} }],
+            };
+            
+            try {
+                const response = await fetchWithRetry(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "Түсініктеме қазір қолжетімді емес.";
+                
+                window.gameState.explanationText = text;
+            } catch (error) {
+                console.error("Gemini API қатесі (Түсініктеме):", error);
+                window.gameState.explanationText = "Кешіріңіз, түсініктеме алу кезінде қателік орын алды.";
+            } finally {
+                // 3. Reset loading state and update UI
+                window.gameState.isExplaining = false;
+                window.updateUI(); 
+            }
+        }
+
+        /**
+         * Teacher Feature: Generates a detailed academic explanation of the main topic.
+         */
+        window.generateTeacherConcept = async function() {
+            if (window.gameState.isGeneratingConcept) return;
+
+            // 1. Set loading state
+            window.gameState.isGeneratingConcept = true;
+            window.gameState.teacherConcept = null;
+            window.updateUI(); 
+
+            const systemPrompt = "Сіз - жоғары оқу орнының ғылыми оқытушысыз. Сізден сұралған тақырып бойынша терең, академиялық және білімге негізделген 300 сөзден аспайтын түсіндірме беріңіз. Түсіндірмеңізді ғылыми терминдермен және мысалдармен байытыңыз. Тек қазақ тілінде жауап беріңіз.";
+            const userQuery = `Менің курсымның негізгі тақырыбы "3D-графика және оның конвейерлік деңгейлері". Осы тақырып бойынша мұғалімдерге арналған толық, ғылыми анықтама жазыңыз.`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                tools: [{ "google_search": {} }],
+            };
+            
+            try {
+                const response = await fetchWithRetry(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "Концепт қазір қолжетімді емес.";
+                
+                window.gameState.teacherConcept = text;
+            } catch (error) {
+                console.error("Gemini API қатесі (Мұғалім Концепті):", error);
+                window.gameState.teacherConcept = "Кешіріңіз, концептіні генерациялау кезінде қателік орын алды.";
+            } finally {
+                // 3. Reset loading state and update UI
+                window.gameState.isGeneratingConcept = false;
+                window.updateUI(); 
+            }
+        }
+
+        // --- FIREBASE FUNCTIONS ---
+        async function initializeFirebase() {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                await new Promise((resolve, reject) => {
+                    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+                        unsubscribe(); 
+                        if (initialAuthToken) {
+                            try {
+                                const cred = await signInWithCustomToken(auth, initialAuthToken);
+                                userId = cred.user.uid;
+                                userName = cred.user.displayName || "Мұғалім"; 
+                            } catch (error) {
+                                console.error("Custom token sign-in failed, falling back to anonymous:", error);
+                                await signInAnonymously(auth);
+                                userId = auth.currentUser.uid;
+                                userName = "Анонимді Оқушы";
+                            }
+                        } else if (!user) {
+                            await signInAnonymously(auth);
+                            userId = auth.currentUser.uid;
+                            userName = "Анонимді Оқушы";
+                        } else {
+                            userId = user.uid;
+                            userName = user.displayName || "Оқушы";
+                        }
+                        window.gameState.isAuthReady = true;
+                        window.updateUI(); 
+                        resolve();
+                    }, reject);
+                });
+
+                if (window.gameState.isAuthReady) {
+                    setupLeaderboardListener();
+                }
+
+            } catch (error) {
+                console.error("Firebase инициализациялау қатесі:", error);
+                document.getElementById('app').innerHTML = `<div class="p-8 bg-red-800 rounded-lg shadow-xl text-center">Дерекқорға қосылу қатесі. Консольды тексеріңіз.</div>`;
+            }
+        }
+
+        window.googleSignIn = async function() {
+            const provider = new GoogleAuthProvider();
+            try {
+                const result = await signInWithPopup(auth, provider);
+                userId = result.user.uid;
+                userName = result.user.displayName || "Оқушы";
+                window.gameState.isAuthReady = true;
+                window.updateUI();
+                setupLeaderboardListener(); // Re-initialize listener after successful sign-in
+            } catch (error) {
+                console.error("Google кіру қатесі:", error);
+            }
+        }
+
+        async function saveResult() {
+            if (!userId) {
+                console.error("Қолданушы ID-сі жоқ, нәтижені сақтау мүмкін емес.");
+                return;
+            }
+            
+            // FIX: Using the public data path for read/write access for all authenticated users (including anonymous).
+            const resultsRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_results', userId);
+            const dataToSave = {
+                userId: userId,
+                userName: userName,
+                score: window.gameState.score,
+                progress: window.gameState.currentQuestionIndex, // 0 to 29 (for better indexing)
+                totalQuestions: QUESTIONS.length,
+                quizComplete: window.gameState.quizComplete,
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                await setDoc(resultsRef, dataToSave, { merge: true });
+                console.log("Нәтиже сәтті сақталды:", dataToSave);
+            } catch (e) {
+                console.error("Нәтижені сақтаудағы қате:", e);
+            }
+        }
+
+        function setupLeaderboardListener() {
+            if (!db || !window.gameState.isAuthReady) {
+                 // Do not attempt to attach listener before DB is ready
+                return;
+            }
+
+            // FIX: Using the public data path
+            const resultsCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
+            // NOTE: Firestore's security rules may require an index for orderBy. Sorting in JS is safer.
+            const q = query(resultsCollectionRef); 
+            
+            onSnapshot(q, (snapshot) => {
+                const results = [];
+                snapshot.forEach((doc) => {
+                    results.push(doc.data());
+                });
+                
+                // Sort in JavaScript memory to avoid indexing errors
+                window.gameState.leaderboardData = results
+                    .sort((a, b) => {
+                        // 1. Sort by score (descending)
+                        if (b.score !== a.score) return b.score - a.score;
+                        // 2. Then sort by timestamp (ascending - earlier time wins tie)
+                        return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(); 
+                    })
+                    .slice(0, 10); // Limit to top 10 after sorting
+                
+                window.updateUI();
+            }, (error) => {
+                console.error("Leaderboard тыңдау қатесі:", error);
+            });
+        }
+        
+        async function fetchAllResultsForExport() {
+            // FIX: Using the public data path
+            const resultsCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
+            const querySnapshot = await getDocs(resultsCollectionRef);
+            const allResults = [];
+            querySnapshot.forEach((doc) => {
+                allResults.push(doc.data());
+            });
+            return allResults;
+        }
+
+        // --- QUIZ LOGIC ---
+        window.startQuiz = function() {
+            // Check if user is signed in anonymously AND is trying to start the quiz
+            if (!userId || userId.startsWith('anon')) {
+                // Show custom modal/message for sign-in requirement
+                document.getElementById('app').innerHTML = `
+                    <div class="text-center p-10 bg-gray-800 rounded-xl shadow-2xl w-full max-w-md">
+                        <h1 class="text-2xl font-bold text-red-400 mb-4">Кіру Қажет</h1>
+                        <p class="mb-6 text-gray-400">Нәтижелеріңізді сақтау және тестті бастау үшін Google аккаунты арқылы кіріңіз. Әйтпесе, нәтижелеріңіз көшбасшылар тақтасында көрінбейді.</p>
+                        <button onclick="window.googleSignIn()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition duration-150 w-full">
+                            <i class="fab fa-google mr-2"></i>Google арқылы кіру
+                        </button>
+                        <button onclick="window.gameState.isQuizActive = true; window.updateUI();" class="mt-4 bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition duration-150 w-full">
+                            Қонақ Режимінде Жалғастыру (Сақталмайды)
+                        </button>
+                    </div>`;
+                return;
+            }
+            window.gameState.isQuizActive = true;
+            window.gameState.currentQuestionIndex = 0;
+            window.gameState.score = 0;
+            window.gameState.quizComplete = false;
+            window.gameState.explanationText = null; // Clear old explanation
+            saveResult(); 
+            window.updateUI();
+        }
+
+        window.handleAnswer = function(selectedIndex) {
+            if (!window.gameState.isQuizActive) return;
+
+            const currentQ = QUESTIONS[window.gameState.currentQuestionIndex];
+            const isCorrect = (selectedIndex === currentQ.correct);
+            
+            // Highlight selected answer briefly
+            const options = document.querySelectorAll('.answer-option');
+            options.forEach((opt, idx) => {
+                opt.classList.add('pointer-events-none'); 
+                if (idx === selectedIndex) {
+                    opt.classList.remove(getRandomKahootColor(idx));
+                    opt.classList.add(isCorrect ? 'bg-green-600' : 'bg-red-600');
+                } else if (idx === currentQ.correct) {
+                    opt.classList.add('border-4', 'border-green-400'); 
+                }
+            });
+
+            if (isCorrect) {
+                window.gameState.score++;
+            }
+
+            // Move to next question after a delay
+            setTimeout(() => {
+                window.gameState.currentQuestionIndex++;
+                window.gameState.explanationText = null; // Clear explanation for next question
+                if (window.gameState.currentQuestionIndex >= QUESTIONS.length) {
+                    window.gameState.isQuizActive = false;
+                    window.gameState.quizComplete = true;
+                    // Only save if not anonymous
+                    if (userId && !userId.startsWith('anon')) {
+                        saveResult();
+                    }
+                } else {
+                    // Only save if not anonymous
+                    if (userId && !userId.startsWith('anon')) {
+                        saveResult(); 
+                    }
+                }
+                window.updateUI();
+            }, 1000); 
+        }
+
+        window.toggleView = function() {
+            window.gameState.isTeacherView = !window.gameState.isTeacherView;
+            window.gameState.explanationText = null; // Clear student features when switching
+            window.gameState.teacherConcept = null; // Clear teacher features when switching
+            window.updateUI();
+        }
+        
+        window.exportResults = async function() {
+            if (!db) {
+                // Use custom message
+                alert("Дерекқор әлі инициализацияланбаған.");
+                return;
+            }
+            const allResults = await fetchAllResultsForExport();
+            if (allResults.length === 0) {
+                // Use custom message
+                 alert("Экспорттауға арналған нәтижелер жоқ.");
+                return;
+            }
+
+            const headers = ["ID", "Аты-жөні", "Дұрыс Жауаптар", "Сұрақтар саны", "Аяқталды", "Уақыты"];
+            
+            const csvData = allResults.map(res => [
+                res.userId,
+                res.userName,
+                res.score,
+                res.totalQuestions,
+                res.quizComplete ? 'Иә' : 'Жоқ',
+                res.timestamp 
+            ].map(String).map(s => `"${s.replace(/"/g, '""')}"`).join(','));
+
+            const csvContent = headers.map(h => `"${h}"`).join(',') + "\n" + csvData.join('\n');
+            
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            
+            if (link.download !== undefined) { 
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", `quiz_results_${new Date().toISOString().slice(0, 10)}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else {
+                alert("CSV экспорты сіздің браузеріңізде қолдау таппайды.");
+            }
+        }
+
+        // --- UI RENDERING ---
+        window.updateUI = function() { 
+            const appDiv = document.getElementById('app');
+            const authDiv = document.getElementById('auth-status');
+            const teacherBtn = document.getElementById('teacher-btn');
+
+            if (!window.gameState.isAuthReady) {
+                 appDiv.innerHTML = '<div class="text-center text-xl font-bold p-8 bg-gray-700 rounded-lg">Жүктелуде...</div>';
+                 return;
+            }
+            
+            // Auth Status & Controls
+            authDiv.innerHTML = userId && !userId.startsWith('anon') ? 
+                `<span class="text-sm font-medium">Сәлем, ${userName}!</span>` : 
+                `<button onclick="window.googleSignIn()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-full shadow-lg transition duration-150">
+                    <i class="fab fa-google mr-2"></i>Google арқылы кіру
+                </button>`;
+
+            // Teacher/Student View Toggle Button
+            teacherBtn.innerHTML = window.gameState.isTeacherView ?
+                `<button onclick="window.toggleView()" class="bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-bold py-2 px-4 rounded-full shadow-lg transition duration-150"><i class="fas fa-user-graduate mr-1"></i> Оқушы Көрінісі</button>` :
+                `<button onclick="window.toggleView()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-full shadow-lg transition duration-150"><i class="fas fa-chalkboard-teacher mr-1"></i> Мұғалім Көрінісі</button>`;
+
+
+            if (window.gameState.isTeacherView) {
+                appDiv.innerHTML = window.renderTeacherView();
+            } else {
+                appDiv.innerHTML = window.renderStudentView();
+            }
+        }
+        
+        window.renderTeacherView = function() { 
+            const results = window.gameState.leaderboardData;
+            const conceptContent = window.gameState.isGeneratingConcept 
+                ? `<div class="flex justify-center items-center h-48"><div class="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-12 w-12"></div><span class="ml-4 text-white">Концепті генерациялануда...</span></div>`
+                : window.gameState.teacherConcept
+                    ? `<div class="bg-gray-700 p-4 rounded-lg mt-4 text-left whitespace-pre-wrap">${window.gameState.teacherConcept}</div>`
+                    : `<div class="bg-gray-700 p-4 rounded-lg mt-4 text-center text-gray-400">Тақырыптық концептіні генерациялау үшін төмендегі түймені басыңыз.</div>`;
+
+            return `
+                <div class="w-full max-w-4xl p-6 bg-gray-800 rounded-2xl shadow-2xl text-center">
+                    <h1 class="text-4xl font-extrabold text-white mb-6 game-title">Мұғалім Панелі: Нақты Уақыттағы Нәтижелер</h1>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        <button onclick="window.exportResults()" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-xl shadow-md transition duration-150">
+                            <i class="fas fa-file-excel mr-2"></i>Нәтижелерді CSV/Excel-ге Экспорттау
+                        </button>
+                        <button onclick="window.generateTeacherConcept()" 
+                            class="bg-fuchsia-600 hover:bg-fuchsia-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition duration-150 ${window.gameState.isGeneratingConcept ? 'opacity-50 cursor-not-allowed' : ''}" 
+                            ${window.gameState.isGeneratingConcept ? 'disabled' : ''}>
+                            ✨ Күрделі Концептіні Түсіндіру
+                        </button>
+                    </div>
+                    
+                    <!-- LLM Concept Box -->
+                    <div class="mb-6 p-4 bg-gray-900 rounded-xl shadow-inner">
+                        <h2 class="text-2xl font-bold text-fuchsia-400 border-b border-gray-700 pb-2 mb-2">3D-Графика Концепті</h2>
+                        ${conceptContent}
+                    </div>
+
+                    <!-- Leaderboard -->
+                    <h2 class="text-2xl font-bold text-yellow-400 mb-4">Оқушылар Нәтижелері</h2>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full bg-gray-700 rounded-xl shadow-lg">
+                            <thead>
+                                <tr class="bg-gray-600 text-left text-sm font-semibold uppercase tracking-wider">
+                                    <th class="p-3 rounded-tl-xl">Рет</th>
+                                    <th class="p-3">Оқушы ID / Аты</th>
+                                    <th class="p-3 text-center">Дұрыс Жауап</th>
+                                    <th class="p-3 text-center">Прогресс</th>
+                                    <th class="p-3 rounded-tr-xl">Статус</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${results.length === 0 ? 
+                                    `<tr><td colspan="5" class="p-4 text-center text-gray-400">Әлі нәтижелер жоқ. Оқушылардың кіруін күтіңіз.</td></tr>` : 
+                                    results.map((res, index) => `
+                                    <tr class="border-b border-gray-600 hover:bg-gray-600 ${index % 2 === 0 ? 'bg-gray-700' : 'bg-gray-750'}">
+                                        <td class="p-3 font-bold">${index + 1}</td>
+                                        <td class="p-3">
+                                            <span class="block font-semibold text-white">${res.userName}</span>
+                                            <span class="block text-xs text-gray-400 truncate w-24">${res.userId}</span>
+                                        </td>
+                                        <td class="p-3 text-center font-bold text-lg">${res.score}</td>
+                                        <td class="p-3">
+                                            <div class="w-full bg-gray-500 rounded-full h-2.5">
+                                                <div class="bg-blue-400 h-2.5 rounded-full" style="width: ${Math.round(((res.progress + 1) / res.totalQuestions) * 100)}%"></div>
+                                            </div>
+                                            <span class="text-xs text-gray-400">${res.progress + 1}/${res.totalQuestions}</span>
+                                        </td>
+                                        <td class="p-3 text-center">
+                                            <span class="text-sm font-semibold ${res.quizComplete ? 'text-green-400' : 'text-yellow-400'}">
+                                                ${res.quizComplete ? 'Аяқталды' : 'Үстінде'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.renderStudentView = function() { 
+            const isAnonymous = userId && userId.startsWith('anon');
+            const canStartQuiz = !isAnonymous;
+
+            if (!window.gameState.isQuizActive && !window.gameState.quizComplete) {
+                const quizStartButton = canStartQuiz 
+                    ? `<button onclick="window.startQuiz()" class="bg-green-600 hover:bg-green-700 text-white font-extrabold text-xl py-4 px-10 rounded-xl shadow-xl transition duration-200 transform hover:scale-105 w-full">
+                           Тестті БАСТАУ <i class="fas fa-play ml-2"></i>
+                       </button>`
+                    : `<button onclick="window.startQuiz()" class="bg-yellow-600 hover:bg-yellow-700 text-white font-extrabold text-xl py-4 px-10 rounded-xl shadow-xl transition duration-200 transform hover:scale-105 w-full">
+                           Қонақ Режимінде Жалғастыру
+                       </button>`;
+
+                return `
+                    <div class="text-center p-10 bg-gray-800 rounded-2xl shadow-2xl w-full max-w-lg">
+                        <h1 class="text-4xl font-extrabold text-yellow-400 mb-2 game-title">3D Графика Тесті</h1>
+                        <p class="text-lg text-gray-300 mb-6">30 сұрақ. Әр сұраққа 20 секунд уақыт беріледі.</p>
+                        <p class="text-sm text-gray-400 mb-8">Сәлем, ${userName} (ID: ${userId})!</p>
+                        ${quizStartButton}
+                    </div>
+                `;
+            }
+
+            if (window.gameState.quizComplete) {
+                return `
+                    <div class="text-center p-10 bg-gray-800 rounded-2xl shadow-2xl w-full max-w-lg">
+                        <h1 class="text-5xl font-extrabold text-green-400 mb-4 game-title">Тест Аяқталды! <i class="fas fa-trophy ml-2"></i></h1>
+                        <p class="text-3xl font-bold mb-6 text-white">Сіздің нәтижеңіз:</p>
+                        <p class="text-6xl font-extrabold text-yellow-500 mb-8">${window.gameState.score}/${QUESTIONS.length}</p>
+                        <button onclick="window.gameState.quizComplete = false; window.gameState.isQuizActive = false; window.updateUI();" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl transition duration-150">
+                            Бастапқы Экранға Оралу
+                        </button>
+                    </div>
+                `;
+            }
+            
+            // Render current question
+            const q = QUESTIONS[window.gameState.currentQuestionIndex];
+            const currentQNum = window.gameState.currentQuestionIndex + 1;
+            
+            const explanationContent = window.gameState.isExplaining 
+                ? `<div class="flex justify-center items-center py-4"><div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-6 w-6"></div><span class="ml-2 text-sm text-gray-300">Түсініктеме генерациялануда...</span></div>`
+                : window.gameState.explanationText
+                    ? `<p class="text-sm italic text-left text-gray-300 mt-2 p-2 bg-gray-700 rounded-lg whitespace-pre-wrap">${window.gameState.explanationText}</p>`
+                    : '';
+
+            return `
+                <div class="w-full max-w-3xl p-6 bg-gray-800 rounded-2xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-3">
+                        <div class="text-xl font-bold text-yellow-400">Сұрақ: ${currentQNum}/${QUESTIONS.length}</div>
+                        <div class="text-sm text-gray-400">Тақырып: ${q.topic}</div>
+                        <div class="text-xl font-bold text-white">Ұпай: ${window.gameState.score}</div>
+                    </div>
+                    
+                    <div class="bg-gray-700 p-6 rounded-xl mb-6 shadow-inner">
+                        <p class="text-2xl font-extrabold text-white text-center">${q.q}</p>
+                    </div>
+
+                    <div class="flex justify-center mb-6">
+                        <img src="${q.image}" alt="Сұраққа арналған диаграмма" class="rounded-xl shadow-lg border-4 border-gray-600 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/400x200/555555/ffffff?text=Көрініс+Жоқ';" />
+                    </div>
+
+                    <!-- LLM Explanation Feature -->
+                    <div class="mb-4">
+                        <button onclick="window.getQuestionExplanation()" 
+                            class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-xl transition duration-150 ${window.gameState.isExplaining ? 'opacity-50 cursor-not-allowed' : ''}"
+                            ${window.gameState.isExplaining ? 'disabled' : ''}>
+                            <i class="fas fa-magic mr-2"></i>✨ Сұрақты Түсіндіруші
+                        </button>
+                        ${explanationContent}
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        ${q.options.map((option, index) => `
+                            <button 
+                                onclick="window.handleAnswer(${index})" 
+                                class="answer-option ${getRandomKahootColor(index)} text-white font-bold py-5 px-6 rounded-xl shadow-md text-lg text-left transition duration-200 transform hover:scale-[1.02] active:scale-[0.98] focus:outline-none focus:ring-4 focus:ring-opacity-50 focus:ring-white">
+                                <span class="font-extrabold mr-2">${['<i class="fas fa-triangle"></i>', '<i class="fas fa-square"></i>', '<i class="fas fa-circle"></i>', '<i class="fas fa-star"></i>'][index]}</span>
+                                ${option}
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+
+        // --- INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', initializeFirebase);
+        
+    </script>
+    
+    <div id="teacher-btn" class="teacher-view-btn">
+        <!-- Button to toggle view will be rendered here -->
+    </div>
+    <div id="auth-status" class="absolute top-4 left-4 p-2 rounded-lg">
+        <!-- Auth status will be rendered here -->
+    </div>
+    <div id="app" class="w-full flex justify-center">
+        <div class="text-center text-xl font-bold p-8 bg-gray-700 rounded-lg">Жүктелуде...</div>
+    </div>
+</body>
+</html>
